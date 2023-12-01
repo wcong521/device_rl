@@ -16,16 +16,11 @@ def test_data_transfer():
 
 def test_kernel():
 
-    arr = Data(torch.from_numpy(np.zeros((3, 4))))
-    n = Data(torch.tensor(9, dtype=torch.float32))
-    arr.to_device()
-    n.to_device()
+    b = Data(263)
+    b.to_device()
 
     kernel = Kernel('kernels/test.cu')
-    kernel.load()
-    kernel.run([(3, 1), (3, 1, 1)], [arr, n])
-
-    print(arr.get())
+    kernel.load().set_config((3, 1), (3, 1, 1)).launch(b)
 
 
 

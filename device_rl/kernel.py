@@ -39,26 +39,24 @@ class Kernel:
                 shell=True, 
                 stderr=subprocess.STDOUT
             ) as process:
-                if process.wait() != 0:
-                    raise Exception()
-
+                if process.wait() != 0: raise Exception()
         except Exception as err:
             print(err)
 
-
         self.module = cuda.module_from_file(bin_path)
         self.function = self.module.get_function('test')
-    
-    def run(self, launch_config, args):
 
-        # args = [arg.pointer if isinstance(arg, Data) else arg for arg in args]
-        print(args[0])
-        self.function(
-            args[0].data,
-            np.float32('9'),
-            grid=launch_config[0],
-            block=launch_config[1]
-        )
+        return self
+    
+
+    def set_config(self, grid, block):
+        self.grid = grid
+        self.block = block
+
+        return self
+
+    def launch(self, *args):
+        self.function(*[a.data for a in args], grid=self.grid, block=self.block)
 
 
 
