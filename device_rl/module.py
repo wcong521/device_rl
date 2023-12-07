@@ -9,7 +9,7 @@ from device_rl.data import Data
 
 bin_dir_path = 'bin'
 
-class Kernel:
+class Module:
 
     def __init__ (self, path):
         self.cu_path = path
@@ -43,9 +43,7 @@ class Kernel:
         except Exception as err:
             print(err)
 
-        self.module = cuda.module_from_file(bin_path)
-        self.function = self.module.get_function('test')
-
+        self._module = cuda.module_from_file(bin_path)
         return self
     
 
@@ -55,8 +53,9 @@ class Kernel:
 
         return self
 
-    def launch(self, *args):
-        self.function(*[a.data for a in args], grid=self.grid, block=self.block)
+    def launch(self, name):
+        kernel = self._module.get_function(name)
+        return lambda *args: kernel(*[a.get() for a in args], grid=self.grid, block=self.block)
 
 
 

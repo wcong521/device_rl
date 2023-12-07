@@ -2,5 +2,5 @@ class Buffer:
     def __init__(self):
         self.contents = []
     
-    def add(data):
+    def add(*data):
         return

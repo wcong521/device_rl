@@ -11,24 +11,24 @@ class Data:
 
         # https://stackoverflow.com/questions/2816992/double-precision-floating-point-in-cuda
         if isinstance(data, np.ndarray):
-            if data.dtype == np.float64:
-                self.data = torch.from_numpy(data).type(torch.float32)
-            elif data.dtype == np.int64:
-                self.data = torch.from_numpy(data).type(torch.int32)
+            if np.issubdtype(data.dtype, np.floating):
+                self._data = torch.from_numpy(data).type(torch.float32)
+            elif np.issubdtype(data.dtype, np.integer):
+                self._data = torch.from_numpy(data).type(torch.int32)
             else:
                 raise Exception(f'Unsupported array type: {data.dtype}.')
         else:
             self.is_scalar = True
             if isinstance(data, float):
-                self.data = np.float32(data)
+                self._data = np.float32(data)
             elif isinstance(data, int) and not isinstance(data, bool):
-                self.data = np.int32(data)
+                self._data = np.int32(data)
             else:
                 raise Exception(f'Unsupported scalar type: {type(data)}.')
             
 
     def where(self):
-        return 'host' if self.is_scalar or self.data.get_device() == -1 else 'device'
+        return 'host' if self.is_scalar or self._data.get_device() == -1 else 'device'
     
     def to_device(self):
         if self.where() == 'device':
@@ -36,7 +36,7 @@ class Data:
             return
         
         if not self.is_scalar:
-            self.data = self.data.cuda()
+            self._data = self._data.cuda()
 
     def to_host(self):
         if self.where() == 'host':
@@ -44,7 +44,13 @@ class Data:
             return
         
         if not self.is_scalar:
-            self.data = self.data.cpu()
+            self._data = self._data.cpu()
+
+    def copy_to_host(self):
+        if self.is_scalar:
+            return self._data
+        else: 
+            return self._data.clone() if self.where() == 'host' else self.data.clone().cpu()
 
     def get(self):
-        return self.data
+        return self._data
