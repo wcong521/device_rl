@@ -15,6 +15,8 @@ class Data:
                 self._data = torch.from_numpy(data).type(torch.float32)
             elif np.issubdtype(data.dtype, np.integer):
                 self._data = torch.from_numpy(data).type(torch.int32)
+            elif np.issubdtype(data.dtype, np.bool_):
+                self._data = torch.from_numpy(data).type(torch.uint8)
             else:
                 raise Exception(f'Unsupported array type: {data.dtype}.')
         else:
@@ -23,6 +25,8 @@ class Data:
                 self._data = np.float32(data)
             elif isinstance(data, int) and not isinstance(data, bool):
                 self._data = np.int32(data)
+            # elif isinstance(data, bool):
+            #     self._data = np.uint8(data)
             else:
                 raise Exception(f'Unsupported scalar type: {type(data)}.')
             
@@ -50,7 +54,7 @@ class Data:
         if self.is_scalar:
             return self._data
         else: 
-            return self._data.clone() if self.where() == 'host' else self.data.clone().cpu()
+            return self._data.clone() if self.where() == 'host' else self._data.clone().cpu()
 
     def get(self):
         return self._data

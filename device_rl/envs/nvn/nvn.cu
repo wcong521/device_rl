@@ -4,34 +4,126 @@
 
 extern "C" {
 
+    __device__ float random_uniform(
+        curandState_t *rng,
+        float low,
+        float high
+    ) {
+        return low + (high - low) * curand_uniform(rng);
+    }
+
+    __device__ void get_rel_obs(
+
+    ) {
+        return;
+    }
+
+    __device__ float* get_obs(
+
+    ) {
+        return;
+    }
+
     __global__ void reset(
-        float* observations, 
-        float* agents, 
-        float* opponents, 
-        float* ball, 
-        int* goal_scored
+        float* obs, 
+        float* state, 
+        int num_agents,
+        int num_opponents
     ) {            
 
         int tid = blockIdx.x * blockDim.x + threadIdx.x;
         int env_idx = blockIdx.x;
-        int agent_idx = threadIdx.x;
+        // int agent_idx = threadIdx.x;
 
-        curandState_t state;
-        curand_init(7, tid, 0, &state);
+        curandState_t rng;
+        curand_init(7, tid, 0, &rng);
 
-        // float random_float = 9000.0f * (curand_uniform(&state) - 0.5f);
+        int i = env_idx * blockDim.x * 4 + threadIdx.x * 4;
 
-        int agents_inx = env_idx * blockDim.x * 4 + agent_idx * 4;
-        agents[agents_inx + 0] = 9000.0f * (curand_uniform(&state) - 0.5f);
-        agents[agents_inx + 1] = 9000.0f * (curand_uniform(&state) - 0.5f);
-        agents[agents_inx + 2] = 2.0f * M_PI * (curand_uniform(&state) - 0.5f);
-        agents[agents_inx + 3] = 0.f;
+        // agents
+        if (threadIdx.x < num_agents) {
 
+            state[i + 0] = random_uniform(&rng, -4500, 4500);
+            state[i + 1] = random_uniform(&rng, -3000, 3000);
+            state[i + 2] = random_uniform(&rng, -M_PI, M_PI);
+            state[i + 3] = 0.f;
 
-        // int tid = blockDim.x * blockIdx.x + threadIdx.x;
-        // printf("%d\n", n);
-        // if (tid < n) {
-        //     arr[tid] += 1;
-        // }                              
+        // opponents
+        } else if (threadIdx.x < num_agents + num_opponents) {
+
+            state[i + 0] = random_uniform(&rng, -4500, 4500);
+            state[i + 1] = random_uniform(&rng, -3000, 3000);
+            state[i + 2] = random_uniform(&rng, -M_PI, M_PI);
+            state[i + 3] = 0.f;
+
+        // ball
+        } else {
+
+            state[i + 0] = random_uniform(&rng, -4500, 4500);
+            state[i + 1] = random_uniform(&rng, -3000, 3000);
+            state[i + 2] = 0.f;
+            state[i + 3] = 0.f;
+
+        }   
+                                
     }
+
+    __global__ void sample(
+        float* actions
+    ) {
+        return;
+    }
+
+    __global__ void step(
+        float* state, 
+        float* act,
+        int num_agents,
+        int num_opponents,
+        float* obs,
+        float* rew,
+        bool* term,
+        bool* trunc,
+        float* info
+    ) {            
+
+        int tid = blockIdx.x * blockDim.x + threadIdx.x;
+        int env_idx = blockIdx.x;
+        // int agent_idx = threadIdx.x;
+        int i = env_idx * blockDim.x * 4 + threadIdx.x * 4;
+
+        curandState_t rng;
+        // TODO: figure out how to make this properly random
+        curand_init(__float2int_rd(state[i]), tid, 0, &rng);
+
+        int step_size = 50;
+
+        // agents
+        if (threadIdx.x < num_agents) {
+
+            state[i + 0] += random_uniform(&rng, -step_size, step_size);
+            state[i + 1] += random_uniform(&rng, -step_size, step_size);
+
+        // opponents
+        } else if (threadIdx.x < num_agents + num_opponents) {
+
+            state[i + 0] += random_uniform(&rng, -step_size, step_size);
+            state[i + 1] += random_uniform(&rng, -step_size, step_size);
+
+        // ball
+        } else {
+
+            state[i + 0] += random_uniform(&rng, -step_size, step_size);
+            state[i + 1] += random_uniform(&rng, -step_size, step_size);
+
+        }                           
+    }
+
+    __global__ void test(
+        
+    ) {
+        return;
+    }
+
+
+
 }
