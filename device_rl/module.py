@@ -47,15 +47,15 @@ class Module:
         return self
     
 
-    def set_config(self, grid, block):
-        self.grid = grid
-        self.block = block
-
-        return self
-
-    def launch(self, name):
+    def launch(self, name, grid, block, shared=0):
+        if not grid:
+            raise Exception('Grid dimensions not specified in kernel launch.')
+        
+        if not block:
+            raise Exception('Block dimensions not specified in kernel launch.')
+        
         kernel = self._module.get_function(name)
-        return lambda *args: kernel(*[a.get() for a in args], grid=self.grid, block=self.block)
+        return lambda *args: kernel(*[a.get() for a in args], grid=grid, block=block, shared=shared)
 
 
 

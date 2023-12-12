@@ -17,7 +17,8 @@ class NvNEnv():
             'angle_indicator_length': 100,
             'entity_linewidth': 2,
             'entity_size': 250,
-            'ball_size': 100
+            'ball_size': 100,
+            'field_opacity': 0.3
         }
 
         self.NAME = 'nvn'
@@ -26,11 +27,21 @@ class NvNEnv():
         self.num_agents = num_agents
         self.num_opponents = num_opponents
 
-        # (x, y, angle, kick)
-        self.act_size = 4
-        self.act = Data(np.zeros((self.num_envs, self.num_agents, self.act_size)))
+        self.grid_dim = (self.num_envs, 1)
+        self.block_dim = (self.num_agents + self.num_opponents + 1, 1, 1)
 
-        self.state = Data(np.zeros((self.num_envs, self.num_agents + self.num_opponents + 1, 4)))
+        # (x, y, angle, kick)
+        self.action = Data(np.zeros((self.num_envs, self.num_agents + self.num_opponents, 4)))
+        self.action_size = Data(4)
+
+        # (x, y, angle, x_vel, y_vel, angle_vel, kick)
+        # ball is (x, y, vel, angle)
+        self.state = Data(np.zeros((self.num_envs, self.num_agents + self.num_opponents + 1, 7)))
+        self.state_size = Data(7)
+
+        # TODO: Shared memory too big
+        self.shared_size = self.state.get()[0].nelement() * self.state.get().element_size() \
+            + self.action.get()[0].nelement() * self.action.get().element_size()
 
 
         # (x, y, sin(angle), cos(angle)) for ball, goal, and opp. goal
@@ -70,7 +81,7 @@ class NvNEnv():
         self.scs = []
         self.lines = []
         self.angle_indicators = []
-        self.fig, self.axes = plt.subplots(self.height, self.width, figsize=(24, 20), dpi = 200)
+        self.fig, self.axes = plt.subplots(self.height, self.width, figsize = (14, 10), dpi = 200)
         self.axes = self.axes.flatten()
 
         state = self.state.get()
@@ -78,24 +89,53 @@ class NvNEnv():
 
             ax = self.axes[i]
 
-            ax.set_xlim(-5000, 5000)
-            ax.set_ylim(-3500, 3500)
+            ax.set_xlim(-5200, 5200)
+            ax.set_ylim(-3700, 3700)
             ax.set_xticks([])
             ax.set_yticks([])
 
-            circle = plt.Circle([0, 0], 1000, edgecolor='white', facecolor='none', alpha = 0.4) 
+            circle = plt.Circle(
+                [0, 0], 1000, 
+                edgecolor='white', 
+                facecolor='none', 
+                alpha = self.render_config['field_opacity']
+            ) 
+            
             ax.add_patch(circle)
 
-            field = plt.Rectangle((-4500, -3000), 9000, 6000, edgecolor='white', facecolor='none', alpha = 0.4)
+            field = plt.Rectangle(
+                (-4500, -3000), 9000, 6000, 
+                edgecolor='white', 
+                facecolor='none', 
+                alpha = self.render_config['field_opacity']
+            )
+
             ax.add_patch(field)
 
-            goal_left = plt.Rectangle((-4500, -750), 750, 1500, edgecolor='white', facecolor='none', alpha = 0.4)
+            goal_left = plt.Rectangle(
+                (-4500, -750), 750, 1500, 
+                edgecolor = 'white', 
+                facecolor = 'none', 
+                alpha = self.render_config['field_opacity']
+            )
+
             ax.add_patch(goal_left)
 
-            goal_right = plt.Rectangle((4500 - 750, -750), 750, 1500, edgecolor='white', facecolor='none', alpha = 0.4)
+            goal_right = plt.Rectangle(
+                (4500 - 750, -750), 750, 1500, 
+                edgecolor = 'white', 
+                facecolor = 'none', 
+                alpha = self.render_config['field_opacity']
+            )
+
             ax.add_patch(goal_right)
 
-            ax.plot([0, 0], [-3000, 3000], color='white', linestyle='-', alpha = 0.4)
+            ax.plot(
+                [0, 0], [-3000, 3000], 
+                color = 'white', 
+                linestyle = '-', 
+                alpha = self.render_config['field_opacity']
+            )
 
 
             lines = []
@@ -143,15 +183,16 @@ class NvNEnv():
 
         self.module = Module(f'envs/{self.NAME}/{self.NAME}.cu')
         self.module.load()
-        self.module.set_config((self.num_envs, 1), (self.num_agents + self.num_opponents + 1, 1, 1))
 
         self.num_agents = Data(self.num_agents)
         self.num_opponents = Data(self.num_opponents)
 
+        self.state_size.to_device()
+        self.action_size.to_device()
         self.num_agents.to_device()
         self.num_opponents.to_device()
         self.obs.to_device()
-        self.act.to_device()
+        self.action.to_device()
         self.rew.to_device()
         self.term.to_device()
         self.trun.to_device()
@@ -161,34 +202,56 @@ class NvNEnv():
         self.goal_scored.to_device()
             
     def reset(self):
-        self.module.launch('reset')(
-            self.obs,
+        self.module.launch(
+            'reset', 
+            grid = self.grid_dim, 
+            block = self.block_dim,
+        )(
             self.state,
+            self.state_size,
             self.num_agents,
-            self.num_opponents
-            # self.agents,
-            # self.opponents,
-            # self.ball,
-            # self.goal_scored,
+            self.num_opponents,
+            # output
+            self.obs,
+            Data(np.random.randint(1, 1000000))
         )
         return
     
     def test(self):
-        self.module.launch('test')(
-
-        )
+        self.module.launch(
+            'test',
+            grid = self.grid_dim, 
+            block = self.block_dim,
+        )()
 
     def sample(self):
-        self.module.launch('sample')(
-            self.act
+        self.module.launch(
+            'sample',
+            grid = self.grid_dim, 
+            block = self.block_dim,
+        )(
+            self.action,
+            self.action_size,
+            Data(np.random.randint(1, 1000000))
         )
     
     def step(self):
-        self.module.launch('step')(
+        self.module.launch(
+            'step',
+            grid = self.grid_dim, 
+            block = self.block_dim,
+            shared = self.shared_size
+        )(
+            # inputs
             self.state,
-            self.act,
+            self.state_size,
+            self.action,
+            self.action_size,
             self.num_agents,
             self.num_opponents,
+            Data(np.random.randint(1, 1000000)),
+
+            # outputs
             self.obs,
             self.rew,
             self.term,

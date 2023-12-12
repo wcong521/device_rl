@@ -36,19 +36,21 @@ def test_simple_env():
 
 def text_nvn_env():
     env = NvNEnv(
-        num_envs = 4,
-        num_agents = 5,
-        num_opponents = 5
+        num_envs = 400,
+        num_agents = 2,
+        num_opponents = 2
     )
 
-    # env.reset()
-    # for i in range(100):
-    #     env.step()
-    #     env.render()
-    #     time.sleep(0.01)
-
-    env.test()
-    print(env.term.get())
+    env.reset()
+    for i in range(100):
+        env.sample()
+        env.step()
+        print(env.state.get()[:, 4, :])
+        # break
+        env.render()
+        time.sleep(0.01)
+    
+    # env.test()
 
     
 
