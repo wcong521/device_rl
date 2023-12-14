@@ -18,9 +18,10 @@ __constant__ float ROBOT_RADIUS = 20;
 
 __constant__ float BALL_RADIUS = 10;
 __constant__ float BALL_ACCELERATION = -0.8;
-__constant__ float BALL_VELOCITY_COEF = 1;
+__constant__ float BALL_VELOCITY_COEF = 3;
 __constant__ float BALL_BOUNCE_MULTIPLIER = 1;
 
+__constant__ float EPISODE_LENGTH = 4000;
 
 extern "C" {
 
@@ -48,11 +49,139 @@ extern "C" {
         return fmaxf(low, fminf(value, high));
     }
 
-
-    __device__ void get_rel_obs(
-
+    __device__ float dis(
+        float x1,
+        float y1, 
+        float x2,
+        float y2
     ) {
-        return;
+        float dx = x2 - x1;
+        float dy = y2 - y1;
+        return sqrtf(dx * dx + dy * dy);
+    }
+
+
+    __device__ void set_rew(
+        float* rew,
+        float* state,
+        int state_size,
+        float* rew_map,
+        int* goal_scored
+    ) {
+        float reward = 0;
+
+        float* ball = &state[(blockDim.x - 1) * state_size];
+        // float* agent = &state[threadIdx.x * state_size];
+
+        // goal
+        if (goal_scored[blockIdx.x] == 1) {
+            reward += rew_map[0];
+        }
+        
+        // own goal
+        if (goal_scored[blockIdx.x] == -1) {
+            reward -= rew_map[0];
+        } 
+
+        float prev_ball_to_goal = dis(ball[4], ball[5], 4800, 0);
+        float ball_to_goal = dis(ball[0], ball[1], 4800, 0);
+
+        reward += rew_map[1] * (prev_ball_to_goal - ball_to_goal);
+
+        rew[0] = reward;
+    }
+
+
+    __device__ void set_rel_obs(
+        float* obs,
+        float* agent,
+        float* other
+    ) {
+        float agent_angle = agent[2];
+
+        float x = other[0] - agent[0];
+        float y = other[1] - agent[1];
+        float angle = atan2(y, x) - agent_angle;
+
+        float x_prime = x * cosf(-agent_angle) - y * sinf(-agent_angle);
+        float y_prime = x * sinf(-agent_angle) + y * cosf(-agent_angle);
+
+        obs[0] = x_prime / 10000;
+        obs[1] = y_prime / 10000;
+        obs[2] = sinf(angle);
+        obs[3] = cosf(angle);
+
+    }
+
+    __device__ void set_rel_obs_xy(
+        float* obs,
+        float* agent,
+        float other_x,
+        float other_y
+    ) {
+        float agent_angle = agent[2];
+
+        float x = other_x - agent[0];
+        float y = other_y - agent[1];
+        float angle = atan2(y, x) - agent_angle;
+
+        float x_prime = x * cosf(-agent_angle) - y * sinf(-agent_angle);
+        float y_prime = x * sinf(-agent_angle) + y * cosf(-agent_angle);
+
+        obs[0] = x_prime / 10000;
+        obs[1] = y_prime / 10000;
+        obs[2] = sinf(angle);
+        obs[3] = cosf(angle);
+    }
+
+    __device__ void set_obs(
+        float* obs,
+        float* state,
+        int state_size,
+        bool is_opponent,
+        int n_agents,
+        int n_opponents
+    ) {
+        float* self = &state[threadIdx.x * state_size];
+
+        // ball
+        set_rel_obs(&obs[0], self, &state[(blockDim.x - 1) * state_size]);
+
+        // 1-hot for can kick
+        obs[4] = -1;
+
+        if (is_opponent) {
+
+            // opponents first
+            for (int i = n_agents; i < blockDim.x - 1; i++) {
+                if (i == threadIdx.x) continue;
+
+                set_rel_obs(&obs[5 + (i - n_agents) * 4], self, &state[i * state_size]);
+            }
+
+            // then agents
+            for (int i = 0; i < n_agents; i++) {
+                if (i == threadIdx.x) continue;
+
+                set_rel_obs(&obs[5 + (i + n_opponents) * 4], self, &state[i * state_size]);
+            }
+
+        } else {
+
+            // agents first then opponents
+            for (int i = 0; i < blockDim.x - 1; i++) {
+                if (i == threadIdx.x) continue;
+
+                set_rel_obs(&obs[5 + i * 4], self, &state[i * state_size]);
+            }
+
+        }
+
+        // goal
+        set_rel_obs_xy(&obs[5 + (blockDim.x - 1) * 4], self, 4800, 0);
+
+        // opponent goal
+        set_rel_obs_xy(&obs[5 + (blockDim.x - 1) * 4 + 4], self, -4800, 0);
     }
 
 
@@ -105,19 +234,24 @@ extern "C" {
     __device__ void update_ball(
         float* state,
         int state_size,
+        int* goal_scored,
         int seed
     ) {
 
         int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
         // update ball velocity
-        int ball_idx = threadIdx.x * state_size;
-        state[ball_idx + 2] += BALL_ACCELERATION;
-        state[ball_idx + 2] = clip(state[ball_idx + 2], 0, 100);
+        float* ball = &state[(blockDim.x - 1) * state_size];
+
+        ball[4] = ball[0];
+        ball[5] = ball[1];
+
+        ball[3] += BALL_ACCELERATION;
+        ball[3] = clip(ball[3], 0, 100);
 
         // update ball position
-        state[ball_idx + 0] += state[ball_idx + 2] * cosf(state[ball_idx + 3]);
-        state[ball_idx + 1] += state[ball_idx + 2] * sinf(state[ball_idx + 3]);
+        ball[0] += ball[3] * cosf(ball[2]);
+        ball[1] += ball[3] * sinf(ball[2]);
 
         // -1 for ball
         int num_entities = blockDim.x - 1;
@@ -126,8 +260,8 @@ extern "C" {
             int entity_idx = i * state_size;
 
             // compute distance between ball and entity
-            float dx = state[ball_idx + 0] - state[entity_idx + 0];
-            float dy = state[ball_idx + 1] - state[entity_idx + 1];
+            float dx = ball[0] - state[entity_idx + 0];
+            float dy = ball[1] - state[entity_idx + 1];
             float distance = sqrtf(dx * dx + dy * dy);
 
             // skip if no collision
@@ -136,22 +270,22 @@ extern "C" {
             curandState_t rng;
             curand_init(__float2int_rd(seed + tid), tid, 0, &rng);
 
-            state[ball_idx + 2] = BALL_VELOCITY_COEF * 10;
-            state[ball_idx + 3] = atan2f(dy, dx);
-            state[ball_idx + 3] += random_normal(&rng, -1, 1) * M_PI / 8;
+            ball[3] = BALL_VELOCITY_COEF * 10;
+            ball[2] = atan2f(dy, dx);
+            ball[2] += random_normal(&rng, -1, 1) * M_PI / 8;
 
         }
 
         bool bounce = true;
-        int ball_x_sign = state[ball_idx + 0] < 0 ? -1 : 1;
-        int ball_y_sign = state[ball_idx + 1] < 0 ? -1 : 1;
+        int ball_x_sign = ball[0] < 0 ? -1 : 1;
+        int ball_y_sign = ball[1] < 0 ? -1 : 1;
         
-        if (abs(state[ball_idx + 1]) > 3000) {
+        if (abs(ball[1]) > 3000) {
             if (bounce) {
 
-                state[ball_idx + 1] = ball_y_sign * 3000;
-                state[ball_idx + 2] *= BALL_BOUNCE_MULTIPLIER;
-                state[ball_idx + 3] *= -1;
+                ball[1] = ball_y_sign * 3000;
+                ball[3] *= BALL_BOUNCE_MULTIPLIER;
+                ball[2] *= -1;
 
             } else {
 
@@ -160,12 +294,12 @@ extern "C" {
             }
         }
 
-        if (abs(state[ball_idx + 0]) > 4500 && abs(state[ball_idx + 1]) > 1100) {
+        if (abs(ball[0]) > 4500 && abs(ball[1]) > 1100) {
             if (bounce) {
 
-                state[ball_idx + 0] = ball_x_sign * 4500;
-                state[ball_idx + 2] *= BALL_BOUNCE_MULTIPLIER;
-                state[ball_idx + 3] = M_PI - state[ball_idx + 3];
+                ball[0] = ball_x_sign * 4500;
+                ball[3] *= BALL_BOUNCE_MULTIPLIER;
+                ball[2] = M_PI - ball[2];
 
             } else {
 
@@ -174,13 +308,16 @@ extern "C" {
             }
         }
 
+        // goal
+        if (ball[0] > 4500 && ball[1] < 1100 && ball[1] > -1100) {
+            goal_scored[blockIdx.x] = 1;
+        }
 
-    }
+        // own goal
+        if (ball[0] < -4500 && ball[1] < 1100 && ball[1] > -1100) {
+            goal_scored[blockIdx.x] = -1;
+        }
 
-    __device__ float* get_obs(
-
-    ) {
-        return;
     }
 
     __device__ void move_agent(
@@ -224,6 +361,7 @@ extern "C" {
     __global__ void reset(
         float* state, 
         int state_size,
+        int* goal_scored,
         int num_agents,
         int num_opponents,
         float* obs,
@@ -236,29 +374,58 @@ extern "C" {
         curandState_t rng;
         curand_init(seed + tid, tid, 0, &rng);
 
+        if (threadIdx.x == 0) {
+            goal_scored[blockDim.x] = 0;
+
+            float* agent = &state[state_idx];
+
+            agent[0] = 0;
+            agent[1] = 0;
+            agent[2] = 0;
+            agent[3] = 0;
+            agent[4] = 0;
+            agent[5] = 0;
+            agent[6] = 0;
+            return;
+        }
+
         // agents
         if (threadIdx.x < num_agents) {
 
-            state[state_idx + 0] = random_uniform(&rng, -4500, 0);
-            state[state_idx + 1] = random_uniform(&rng, -3000, 3000);
-            state[state_idx + 2] = random_uniform(&rng, -M_PI, M_PI);
-            state[state_idx + 3] = 0.f;
+            float* agent = &state[state_idx];
+
+            agent[0] = random_uniform(&rng, -4500, 0);
+            agent[1] = random_uniform(&rng, -3000, 3000);
+            agent[2] = random_uniform(&rng, -M_PI, M_PI);
+            agent[3] = 0;
+            agent[4] = 0;
+            agent[5] = 0;
+            agent[6] = 0;
 
         // opponents
         } else if (threadIdx.x < num_agents + num_opponents) {
 
-            state[state_idx + 0] = random_uniform(&rng, -4500, 0);
-            state[state_idx + 1] = random_uniform(&rng, -3000, 3000);
-            state[state_idx + 2] = random_uniform(&rng, -M_PI, M_PI);
-            state[state_idx + 3] = 0.f;
+            float* opponent = &state[state_idx];
+
+            opponent[0] = random_uniform(&rng, -4500, 0);
+            opponent[1] = random_uniform(&rng, -3000, 3000);
+            opponent[2] = random_uniform(&rng, -M_PI, M_PI);
+            opponent[3] = 0;
+            opponent[4] = 0;
+            opponent[5] = 0;
+            opponent[6] = 0;
 
         // ball
         } else {
 
-            state[state_idx + 0] = random_uniform(&rng, 0, 4500);
-            state[state_idx + 1] = random_uniform(&rng, -3000, 3000);
-            state[state_idx + 2] = 0.f;
-            state[state_idx + 3] = 0.f;
+            float* ball = &state[state_idx];
+
+            ball[0] = 500;
+            ball[1] = 0;
+            ball[2] = 0;
+            ball[3] = 0;
+            ball[4] = 0;
+            ball[5] = 0;
 
         } 
 
@@ -295,20 +462,28 @@ extern "C" {
         int action_size,
         int seed
     ) {
+
+        if (threadIdx.x >= blockDim.x - 1) return;
+
         int tid = blockIdx.x * blockDim.x + threadIdx.x;
         int action_idx = blockIdx.x * (blockDim.x - 1) * action_size + threadIdx.x * action_size;
-        int step_size = 1;
-
         curandState_t rng;
         curand_init(__float2int_rd(seed + tid), tid, 0, &rng);
+        int step_size = 1;
 
-        // action[action_idx + 0] = random_uniform(&rng, -step_size, step_size);
-        // action[action_idx + 1] = random_uniform(&rng, -step_size, step_size);
-        // action[action_idx + 2] = random_uniform(&rng, -M_PI, M_PI);
+        action[action_idx + 0] = random_uniform(&rng, -step_size, step_size);
+        action[action_idx + 1] = random_uniform(&rng, -step_size, step_size);
+        action[action_idx + 2] = random_uniform(&rng, -M_PI, M_PI);
+        // if (threadIdx.x == 0) {
+        //     action[action_idx + 0] = .5;
+        //     action[action_idx + 1] = 0;
+        //     action[action_idx + 2] = 0;
+        //     return;
+        // }
 
-        action[action_idx + 0] = 0;
-        action[action_idx + 1] = 0;
-        action[action_idx + 2] = 0;    
+        // action[action_idx + 0] = 0;
+        // action[action_idx + 1] = 0;
+        // action[action_idx + 2] = 0;    
 
         // action[action_idx + 0] = 0;
         // action[action_idx + 1] = 0;
@@ -316,75 +491,135 @@ extern "C" {
         
     }
 
+    __global__ void step2(
+        float* state, 
+        int state_size,
+        float* action,
+        int action_size,
+        int obs_size,
+        float* rew_map,
+        int n_agents,
+        int n_opponents,
+        int* time,
+        int seed,
+        float* obs,
+        float* rew,
+        bool* term,
+        bool* trun,
+        float* info
+    ) { 
+        return;
+
+    }
+
     __global__ void step(
         float* state, 
         int state_size,
         float* action,
         int action_size,
-        int num_agents,
-        int num_opponents,
+        int obs_size,
+        float* rew_map,
+        int* goal_scored,
+        int n_agents,
+        int n_opponents,
+        int* time,
         int seed,
         float* obs,
         float* rew,
         bool* term,
-        bool* trunc,
+        bool* trun,
         float* info
     ) {            
 
-        extern __shared__ float sh_mem[];
-        float* sh_state = &sh_mem[0];
-        float* sh_action = &sh_mem[gridDim.x * blockDim.x * state_size];
-
         int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
+        // shared memory
+        extern __shared__ float sh_mem[];
+
+        // pointer to the start of state array
+        float* sh_state = &sh_mem[0];
+
+        // pointer to the start of action array
+        float* sh_action = &sh_mem[blockDim.x * state_size];
+
+        // shared memory indicies corresponding to this thread
         int sh_state_idx = threadIdx.x * state_size;
         int sh_action_idx = threadIdx.x * action_size;
 
+        // global memory indicies corresponding to this thread
         int state_idx = blockIdx.x * blockDim.x * state_size + sh_state_idx;
         int action_idx = blockIdx.x * (blockDim.x - 1) * action_size + sh_action_idx;
 
         // load shared memory
-        for (int i = 0; i < state_size; i++) {
+        for (int i = 0; i < state_size; i++)
             sh_state[sh_state_idx + i] = state[state_idx + i];
+
+        if (threadIdx.x < n_agents + n_opponents) {
+            for (int j = 0; j < action_size; j++) {
+                sh_action[sh_action_idx + j] = action[action_idx + j];
+            }
         }
 
-        for (int i = 0; i < action_size; i++) {
-            sh_action[sh_action_idx + i] = action[action_idx + i];
-        }
+        // only first thread in first block updates the time
+        if (tid == 0) time[0]++;  
 
         // ensure that all threads have finished loading shared memory before continuing
         __syncthreads();
 
-        if (threadIdx.x < num_agents) {
+        if (threadIdx.x < n_agents) {
             move_agent(&sh_state[sh_state_idx], &sh_action[sh_action_idx]);
-        } else if (threadIdx.x < num_agents + num_opponents) {
+        } else if (threadIdx.x < n_agents + n_opponents) {
             move_opponent(&sh_state[sh_state_idx], &sh_action[sh_action_idx]);
         } 
 
+        // ensures that all agents/opponents have moved before checking for collisions
+        // prevents race conditions (ex. detecting collision with an agent that hasn't been moved yet)
         __syncthreads();
 
-        if (threadIdx.x < num_agents + num_opponents) {
+        if (threadIdx.x < n_agents + n_opponents) {
             check_collisions(sh_state, state_size);
         } else {
             // last thread updates ball
-            update_ball(sh_state, state_size, seed);
+            update_ball(sh_state, state_size, goal_scored, seed);
         }
 
-        // ensure that all threads have finished moditfying shared memory before continuing
+        // ensures that all agents/opponents/ball have stopped changing
+        __syncthreads();
+
+        int obs_idx = blockIdx.x * (n_agents + n_opponents) * obs_size + threadIdx.x * obs_size;
+
+        if (threadIdx.x < n_agents) {
+
+            int idx = blockIdx.x * n_agents + threadIdx.x;
+
+            set_obs(&obs[obs_idx], sh_state, state_size, false, n_agents, n_opponents);
+            set_rew(&rew[idx], sh_state, state_size, rew_map, goal_scored);
+
+            term[idx] = time[0] > EPISODE_LENGTH || goal_scored[blockIdx.x] == 1;
+            trun[idx] = false;
+            info[idx] = 0;
+
+        } else if (threadIdx.x < n_agents + n_opponents) {
+
+            set_obs(&obs[obs_idx], sh_state, state_size, true, n_agents, n_opponents);
+        }
+
         __syncthreads();
 
         for (int i = 0; i < state_size; i++)
             state[state_idx + i] = sh_state[sh_state_idx + i];    
 
         for (int i = 0; i < action_size; i++)
-            action[action_idx + i] = sh_action[sh_action_idx + i];                             
+            action[action_idx + i] = sh_action[sh_action_idx + i]; 
+
+                          
     }
 
     __global__ void test(
         
     ) {
-        int clip = fmaxf(2, fminf(3, 10));
-        printf("%d", clip);
+        // int clip = fmaxf(2, fminf(3, 10));
+        // printf("%d", clip);
     }
 
 

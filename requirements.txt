@@ -1,0 +1,12 @@
+gymnasium==0.29.1
+matplotlib==3.8.2
+numpy==1.26.2
+pettingzoo==1.24.1
+pycuda==2023.1
+pygame==2.1.2
+rich==13.7.0
+setuptools==58.1.0
+setuptools==45.2.0
+SuperSuit==3.9.0
+torch==2.0.1
+torch==2.1.1

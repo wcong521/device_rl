@@ -4,6 +4,7 @@ import subprocess
 import pycuda.driver as cuda
 import pycuda.compiler as compiler
 import numpy as np
+from rich import print
 
 from device_rl.data import Data
 
@@ -27,7 +28,7 @@ class Module:
         ) as process:
             if process.wait() != 0:
                 raise Exception(f"Failed to create bin directory at {bin_dir_path}")
-        print(f"Created bin directory at {bin_dir_path}.")
+        # print(f"[grey7]Created bin directory at {bin_dir_path}.[/grey7]")
 
         if os.path.exists(f'{bin_path}'):
             os.remove(f'{bin_path}')

@@ -11,6 +11,7 @@ class Data:
 
         # https://stackoverflow.com/questions/2816992/double-precision-floating-point-in-cuda
         if isinstance(data, np.ndarray):
+            
             if np.issubdtype(data.dtype, np.floating):
                 self._data = torch.from_numpy(data).type(torch.float32)
             elif np.issubdtype(data.dtype, np.integer):
